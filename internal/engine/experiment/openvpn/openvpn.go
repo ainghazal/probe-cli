@@ -9,6 +9,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/ooni/probe-cli/v3/internal/engine/netx/archival"
@@ -160,6 +162,7 @@ func (m *Measurer) bootstrap(ctx context.Context, sess model.ExperimentSession,
 		return
 	}
 	tk.Response = string(body)
+	tk.MiniVPNVersion = getMiniVPNVersion()
 
 	// TODO get bootstrap time from the client - but for that we need to
 	// access it, not just pass the dialer to http client...
@@ -221,4 +224,18 @@ func (m *Measurer) GetSummaryKeys(measurement *model.Measurement) (interface{}, 
 		return nil, errNilTestKeys
 	}
 	return SummaryKeys{IsAnomaly: testkeys.Failure != nil}, nil
+}
+
+func getMiniVPNVersion() string {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+	for _, dep := range bi.Deps {
+		p := strings.Split(dep.Path, "/")
+		if p[len(p)-1] == "minivpn" {
+			return dep.Version
+		}
+	}
+	return ""
 }
