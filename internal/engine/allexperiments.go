@@ -11,6 +11,7 @@ import (
 	"github.com/ooni/probe-cli/v3/internal/engine/experiment/hirl"
 	"github.com/ooni/probe-cli/v3/internal/engine/experiment/httphostheader"
 	"github.com/ooni/probe-cli/v3/internal/engine/experiment/ndt7"
+	"github.com/ooni/probe-cli/v3/internal/engine/experiment/openvpn"
 	"github.com/ooni/probe-cli/v3/internal/engine/experiment/psiphon"
 	"github.com/ooni/probe-cli/v3/internal/engine/experiment/quicping"
 	"github.com/ooni/probe-cli/v3/internal/engine/experiment/riseupvpn"
@@ -200,6 +201,19 @@ var experimentsByName = map[string]func(*Session) *ExperimentBuilder{
 			},
 			config:      &sniblocking.Config{},
 			inputPolicy: InputOrQueryBackend,
+		}
+	},
+
+	"openvpn": func(session *Session) *ExperimentBuilder {
+		return &ExperimentBuilder{
+			build: func(config interface{}) *Experiment {
+				return NewExperiment(session, openvpn.NewExperimentMeasurer(
+					*config.(*openvpn.Config),
+				))
+			},
+			config: &openvpn.Config{},
+			//inputPolicy: InputStrictlyRequired,
+			inputPolicy: InputOptional,
 		}
 	},
 
