@@ -92,10 +92,11 @@ func (m *Measurer) Run(
 	ctx context.Context, sess model.ExperimentSession,
 	measurement *model.Measurement, callbacks model.ExperimentCallbacks,
 ) error {
-	dialer, err := m.setup(ctx, sess.Logger())
+	config := string(measurement.Input)
+	dialer, err := m.setup(ctx, config, sess.Logger())
 	if err != nil {
 		// we cannot setup the experiment
-		// TODO this include if we don't have the correct certificates etc.
+		// TODO this includes if we don't have the correct certificates etc.
 		// This means that we need to get the cert material ahead of time.
 		return err
 	}
@@ -118,24 +119,25 @@ func (m *Measurer) Run(
 			callbacks.OnProgress(1.0, testName+" experiment is finished")
 			return nil
 		}
+		// todo: report progress...
 	}
 }
 
 // setup prepares for running the openvpn experiment. Returns a minivpn dialer on success.
 // Returns an error on failure.
-func (m *Measurer) setup(ctx context.Context, logger model.Logger) (*vpn.Dialer, error) {
+func (m *Measurer) setup(ctx context.Context, config string, logger model.Logger) (*vpn.RawDialer, error) {
 	// TODO - pass context to dialer
-	o, err := vpn.ParseConfigFile("config")
+	o, err := vpn.ParseConfigFile(config)
 	if err != nil {
 		return nil, err
 	}
-	dialer := vpn.NewDialerFromOptions(o)
-	return &dialer, nil
+	raw := vpn.NewRawDialer(o)
+	return raw, nil
 }
 
 // bootstrap runs the bootstrap.
 func (m *Measurer) bootstrap(ctx context.Context, sess model.ExperimentSession,
-	out chan<- *TestKeys, vpndialer *vpn.Dialer) {
+	out chan<- *TestKeys, raw *vpn.RawDialer) {
 	tk := &TestKeys{
 		BootstrapTime: 0,
 		Failure:       nil,
@@ -145,9 +147,20 @@ func (m *Measurer) bootstrap(ctx context.Context, sess model.ExperimentSession,
 	defer func() {
 		out <- tk
 	}()
+
+	s := time.Now()
+
+	raw.Dial()
+
+	tk.BootstrapTime = time.Now().Sub(s).Seconds()
+
+	d := vpn.NewDialer(raw)
+
+	// TODO split into pinger + urlgrabber functions
+
 	client := http.Client{
 		Transport: &http.Transport{
-			DialContext: vpndialer.DialContext,
+			DialContext: d.DialContext,
 		},
 	}
 	resp, err := client.Get("https://wtfismyip.com/json")
@@ -163,11 +176,6 @@ func (m *Measurer) bootstrap(ctx context.Context, sess model.ExperimentSession,
 	}
 	tk.Response = string(body)
 	tk.MiniVPNVersion = getMiniVPNVersion()
-
-	// TODO get bootstrap time from the client - but for that we need to
-	// access it, not just pass the dialer to http client...
-
-	//tk.BootstrapTime = tun.BootstrapTime().Seconds()
 }
 
 // baseTunnelDir returns the base directory to use for tunnelling
