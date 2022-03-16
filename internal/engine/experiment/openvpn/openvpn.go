@@ -17,6 +17,7 @@ import (
 	"github.com/ooni/probe-cli/v3/internal/model"
 	"github.com/ooni/probe-cli/v3/internal/tunnel"
 
+	"github.com/ainghazal/minivpn/extras"
 	"github.com/ainghazal/minivpn/vpn"
 )
 
@@ -26,11 +27,25 @@ const (
 
 	// testVersion is the openvpn experiment version.
 	testVersion = "0.0.1"
+
+	// pingCount tells how many icmp echo requests to send.
+	pingCount = 3
+
+	// pingTarget is the target IP we used for pings.
+	pingTarget = "8.8.8.8"
+
+	// urlGrabURI is an URI we fetch to check web connectivity and external IP.
+	urlGrabURI = "https://api.ipify.org/?format=json"
 )
 
 // Config contains the experiment config.
 type Config struct {
 	ConfigFile string `ooni:"Configuration file for the OpenVPN experiment"`
+}
+
+type Ping struct {
+	RTT float32 `json:"rtt"`
+	TTL uint8   `json:"ttl"`
 }
 
 // TestKeys contains the experiment's result.
@@ -47,14 +62,22 @@ type TestKeys struct {
 	// MiniVPNVersion contains the version of the minivpn library used.
 	MiniVPNVersion string `json:"minivpn_version"`
 
+	// Pings is an array of ping stats.
+	Pings []Ping `json:"pings"`
+
+	// PingTarget is the target we used for ping
+	PingTarget string `json:"ping_target"`
+
 	// just to capture something for now..
-	Response string `json:"wtfip_response"`
+	Response string `json:"ip_query"`
 }
 
 // Measurer performs the measurement.
 type Measurer struct {
 	// config contains the experiment settings.
 	config Config
+
+	raw *vpn.RawDialer
 
 	// mockStartListener is an optional function that allows us to override
 	// the function we actually use to start the ptx listener.
@@ -109,17 +132,18 @@ func (m *Measurer) Run(
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
-	// TODO need to pass the timeout-context to the dialer.
-	go m.bootstrap(ctx, sess, tkch, dialer)
+	m.raw = dialer
 
+	// TODO need to pass the timeout-context to the dialer.
+	go m.bootstrap(ctx, sess, tkch)
 	for {
 		select {
 		case tk := <-tkch:
 			measurement.TestKeys = tk
-			callbacks.OnProgress(1.0, testName+" experiment is finished")
+			callbacks.OnProgress(1.0, testName+" bootstrap done")
 			return nil
 		}
-		// todo: report progress...
+		// todo: progress...
 	}
 }
 
@@ -137,7 +161,7 @@ func (m *Measurer) setup(ctx context.Context, config string, logger model.Logger
 
 // bootstrap runs the bootstrap.
 func (m *Measurer) bootstrap(ctx context.Context, sess model.ExperimentSession,
-	out chan<- *TestKeys, raw *vpn.RawDialer) {
+	out chan<- *TestKeys) {
 	tk := &TestKeys{
 		BootstrapTime: 0,
 		Failure:       nil,
@@ -149,21 +173,27 @@ func (m *Measurer) bootstrap(ctx context.Context, sess model.ExperimentSession,
 	}()
 
 	s := time.Now()
-
-	raw.Dial()
-
+	m.raw.Dial()
 	tk.BootstrapTime = time.Now().Sub(s).Seconds()
+	tk.MiniVPNVersion = getMiniVPNVersion()
 
-	d := vpn.NewDialer(raw)
+	// ping
+	p := extras.NewPinger(m.raw, pingTarget, pingCount)
+	p.Run()
+	st := p.Stats()
+	for i := 0; i < pingCount; i++ {
+		tk.Pings = append(tk.Pings, Ping{st[i].RTT(), st[i].TTL()})
+	}
+	tk.PingTarget = pingTarget
 
-	// TODO split into pinger + urlgrabber functions
-
+	// urlgrab
+	d := vpn.NewDialer(m.raw)
 	client := http.Client{
 		Transport: &http.Transport{
 			DialContext: d.DialContext,
 		},
 	}
-	resp, err := client.Get("https://wtfismyip.com/json")
+	resp, err := client.Get(urlGrabURI)
 	if err != nil {
 		// Note: archival.NewFailure scrubs IP addresses
 		tk.Failure = archival.NewFailure(err)
@@ -175,7 +205,6 @@ func (m *Measurer) bootstrap(ctx context.Context, sess model.ExperimentSession,
 		return
 	}
 	tk.Response = string(body)
-	tk.MiniVPNVersion = getMiniVPNVersion()
 }
 
 // baseTunnelDir returns the base directory to use for tunnelling
