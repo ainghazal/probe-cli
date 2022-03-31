@@ -15,7 +15,6 @@ import (
 
 	"github.com/ooni/probe-cli/v3/internal/engine/netx/archival"
 	"github.com/ooni/probe-cli/v3/internal/model"
-	"github.com/ooni/probe-cli/v3/internal/tunnel"
 
 	"github.com/ainghazal/minivpn/extras"
 	"github.com/ainghazal/minivpn/vpn"
@@ -219,15 +218,6 @@ func (m *Measurer) startListener(f func() error) error {
 	//	return m.mockStartListener()
 	//}
 	return f()
-}
-
-// startTunnel returns the proper function to start a tunnel.
-func (m *Measurer) startTunnel() func(
-	ctx context.Context, config *tunnel.Config) (tunnel.Tunnel, tunnel.DebugInfo, error) {
-	//if m.mockStartTunnel != nil {
-	//	return m.mockStartTunnel
-	//}
-	return tunnel.Start
 }
 
 // NewExperimentMeasurer creates a new ExperimentMeasurer.

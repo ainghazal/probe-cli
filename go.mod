@@ -2,11 +2,14 @@ module github.com/ooni/probe-cli/v3
 
 go 1.16
 
+replace github.com/ainghazal/minivpn => ../../VPNLab/minivpn
+
 require (
 	filippo.io/age v1.0.0
 	git.torproject.org/pluggable-transports/goptlib.git v1.2.0
 	git.torproject.org/pluggable-transports/snowflake.git/v2 v2.0.1
 	github.com/AlecAivazis/survey/v2 v2.3.2
+	github.com/ainghazal/minivpn v0.0.2
 	github.com/alecthomas/kingpin v2.2.6+incompatible
 	github.com/alecthomas/units v0.0.0-20211218093645-b94a6e3cc137 // indirect
 	github.com/apex/log v1.9.0
@@ -43,7 +46,6 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/rogpeppe/go-internal v1.8.1
 	github.com/rubenv/sql-migrate v1.0.0
-	github.com/sirupsen/logrus v1.7.0 // indirect
 	github.com/templexxx/cpu v0.0.9 // indirect
 	github.com/tjfoc/gmsm v1.4.1 // indirect
 	github.com/xtaci/smux v1.5.16 // indirect
@@ -55,6 +57,9 @@ require (
 	golang.org/x/sys v0.0.0-20220114195835-da31bd327af9
 	golang.org/x/term v0.0.0-20210927222741-03fcf44c2211 // indirect
 	golang.org/x/tools v0.1.8 // indirect
+	golang.zx2c4.com/go118/netip v0.0.0-20211105124833-002a02cb0e53
+	golang.zx2c4.com/wireguard v0.0.0-20210424170727-c9db4b7aaa22
+	golang.zx2c4.com/wireguard/tun/netstack v0.0.0-20220202223031-3b95c81cc178
 	gopkg.in/mgo.v2 v2.0.0-20190816093944-a6b53ec6cb22 // indirect
 	upper.io/db.v3 v3.8.0+incompatible
 )

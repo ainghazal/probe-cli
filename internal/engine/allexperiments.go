@@ -27,6 +27,7 @@ import (
 	"github.com/ooni/probe-cli/v3/internal/engine/experiment/webconnectivity"
 	"github.com/ooni/probe-cli/v3/internal/engine/experiment/webstepsx"
 	"github.com/ooni/probe-cli/v3/internal/engine/experiment/whatsapp"
+	"github.com/ooni/probe-cli/v3/internal/engine/experiment/wireguard"
 )
 
 var experimentsByName = map[string]func(*Session) *ExperimentBuilder{
@@ -211,9 +212,8 @@ var experimentsByName = map[string]func(*Session) *ExperimentBuilder{
 					*config.(*openvpn.Config),
 				))
 			},
-			config: &openvpn.Config{},
-			//inputPolicy: InputStrictlyRequired,
-			inputPolicy: InputOptional,
+			config:      &openvpn.Config{},
+			inputPolicy: InputStrictlyRequired,
 		}
 	},
 
@@ -322,6 +322,17 @@ var experimentsByName = map[string]func(*Session) *ExperimentBuilder{
 			},
 			config:      &whatsapp.Config{},
 			inputPolicy: InputNone,
+		}
+	},
+	"wireguard": func(session *Session) *ExperimentBuilder {
+		return &ExperimentBuilder{
+			build: func(config interface{}) *Experiment {
+				return NewExperiment(session, wireguard.NewExperimentMeasurer(
+					*config.(*wireguard.Config),
+				))
+			},
+			config:      &wireguard.Config{},
+			inputPolicy: InputStrictlyRequired,
 		}
 	},
 }
