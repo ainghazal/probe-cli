@@ -7,11 +7,15 @@ require (
 	git.torproject.org/pluggable-transports/goptlib.git v1.2.0
 	git.torproject.org/pluggable-transports/snowflake.git/v2 v2.3.0
 	github.com/AlecAivazis/survey/v2 v2.3.5
+	github.com/BurntSushi/toml v1.0.0
+	github.com/Entscheider/sshtool v0.0.0-20220821211315-3e76ffce6baf
 	github.com/alecthomas/kingpin v2.2.6+incompatible
 	github.com/apex/log v1.9.0
 	github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5
+	github.com/creack/pty v1.1.17
 	github.com/cretz/bine v0.2.0
 	github.com/fatih/color v1.13.0
+	github.com/gliderlabs/ssh v0.3.3
 	github.com/google/go-cmp v0.5.8
 	github.com/google/martian/v3 v3.3.2
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
@@ -22,6 +26,7 @@ require (
 	github.com/lucas-clemente/quic-go v0.28.1
 	github.com/mattn/go-colorable v0.1.13
 	github.com/miekg/dns v1.1.50
+	github.com/mikesmitty/edkey v0.0.0-20170222072505-3356ea4e686a
 	github.com/mitchellh/go-wordwrap v1.0.1
 	github.com/montanaflynn/stats v0.6.6
 	github.com/ooni/go-libtor v1.1.6
@@ -33,6 +38,8 @@ require (
 	github.com/pborman/getopt/v2 v2.1.0
 	github.com/pion/stun v0.3.5
 	github.com/pkg/errors v0.9.1
+	github.com/pkg/sftp v1.13.4
+	github.com/radovskyb/watcher v1.0.7
 	github.com/rogpeppe/go-internal v1.9.0
 	github.com/rubenv/sql-migrate v1.2.0
 	github.com/upper/db/v4 v4.6.0
@@ -44,7 +51,9 @@ require (
 )
 
 require (
+	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
 	github.com/inconshreveable/mousetrap v1.0.0 // indirect
+	github.com/kr/fs v0.1.0 // indirect
 	github.com/segmentio/fasthash v1.0.3 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 )
