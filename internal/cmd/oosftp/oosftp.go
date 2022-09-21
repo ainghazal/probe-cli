@@ -16,7 +16,6 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/Entscheider/sshtool/logger"
-	log2 "github.com/Entscheider/sshtool/logger"
 	mware "github.com/Entscheider/sshtool/middleware"
 	sftp2 "github.com/Entscheider/sshtool/sftp"
 	"github.com/Entscheider/sshtool/sshport"
@@ -28,7 +27,10 @@ import (
 
 // See also https://github.com/pkg/sftp/blob/master/examples/sftp-server/main.go
 
-const sftpHelp = "Expose a sftp service that processes sftp reports"
+const (
+	sftpHelp                   = "Runs SFTP server to receive reports"
+	expirySessionTimeInSeconds = 300
+)
 
 // ConfigSftp describes a parsed yaml config containing all parameters for starting the sftp server.
 type ConfigSftp struct {
@@ -122,11 +124,11 @@ type ContextSftp struct {
 	// TODO: This doesn't get increased anywhere
 	activeConnections int32
 	// Object to log all access and logins.
-	accessLogger log2.AccessLogger
+	accessLogger logger.AccessLogger
 	// same same but different
 	fileCallback func(string)
 	// Object to log debug and errors.
-	logger log2.Logger
+	logger logger.Logger
 }
 
 func watchDirForDrops(dir string) {
@@ -137,10 +139,9 @@ func watchDirForDrops(dir string) {
 		for {
 			select {
 			case event := <-w.Event:
-				fmt.Println(event) // Print the event's info.
 				if event.Op == watcher.Create {
 					log.Println("Processing", event.Path)
-					ProcessFileCallback(event.Path)
+					processMeasurementFile(event.Path)
 				}
 
 			case err := <-w.Error:
@@ -164,8 +165,14 @@ func watchDirForDrops(dir string) {
 func createRandomSubDir(base string) string {
 	rootDir := filepath.Join(base, strconv.Itoa(rand.Intn(999999)))
 	os.MkdirAll(rootDir, 0755)
-	// TODO move this up to the root temporal folder -------------------------
-	go watchDirForDrops(rootDir)
+
+	// this folder will be removed, will all its contents, in
+	// expirySessionTimeInSeconds time.
+	go func() {
+		time.Sleep(time.Second * expirySessionTimeInSeconds)
+		os.RemoveAll(rootDir)
+	}()
+
 	return rootDir
 }
 
@@ -237,15 +244,10 @@ func LoadConfigSftp(filename string) (ConfigSftp, error) {
 func (c *ConfigSftp) MakeContext() ContextSftp {
 	log := logger.NewLogger(os.Stdout)
 
-	cb := func(path string) {
-		//fmt.Println("ROOT>>>", c.Root)
-		//processFileCallback(path)
-	}
-
 	return ContextSftp{
 		config:            c,
 		activeConnections: 0,
-		accessLogger:      NewAccessLogger(os.Stdout, cb),
+		accessLogger:      logger.NewAccessLogger(os.Stdout),
 		logger:            log,
 		tcpipHandler:      sshport.NewSSHConnectionHandler(log, context.Background()),
 	}
@@ -256,6 +258,15 @@ func (c *ContextSftp) Listen(ctx context.Context) {
 	// Build a function that validates ssh connection request and rejects them if they are not authorized.
 	validationF, err := c.config.buildKeyValidationFunc()
 	fatal(err)
+
+	// Watch for changes the root folder for each configured user.
+	for _, user := range c.config.Users {
+		for _, fs := range user.Filesystem {
+			go watchDirForDrops(fs.Root)
+		}
+	}
+	// TODO(ainghazal): could queue all these folders for deletion too.
+
 	// validationF -> public key validation function expected from the ssh package.
 	publicKeyHandler := func(ctx gssh.Context, key gssh.PublicKey) bool {
 		username := ctx.User()
@@ -263,14 +274,14 @@ func (c *ContextSftp) Listen(ctx context.Context) {
 		return validationF(username, key)
 	}
 	// This function creates the [sftp.Handlers] filesystem for the user of the connection.
-	sftpHandler := func(connectionInfo log2.ConnectionInfo) gosftp.Handlers {
+	sftpHandler := func(connectionInfo logger.ConnectionInfo) gosftp.Handlers {
 		fs, err := c.config.CreateFS(connectionInfo.Username)
 		if err != nil {
 			// On error, we serve an empty fs
 			c.logger.Err("ContextSftp", fmt.Sprintf("Error while creating virtual fs for user %s: %s", connectionInfo.Username, err.Error()))
 			fs = sftp2.EmptyFS{}
 		}
-		return sftp2.CreateSFTPHandler(fs, log2.AccessLogger(c.accessLogger), connectionInfo, c.logger)
+		return sftp2.CreateSFTPHandler(fs, c.accessLogger, connectionInfo, c.logger)
 	}
 	s := &gssh.Server{
 		Addr: fmt.Sprintf("%s:%d", c.config.Host, c.config.Port),

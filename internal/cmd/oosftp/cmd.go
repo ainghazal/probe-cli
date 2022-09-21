@@ -2,13 +2,14 @@ package main
 
 import (
 	"fmt"
-	"github.com/BurntSushi/toml"
-	gssh "github.com/gliderlabs/ssh"
-	"golang.org/x/crypto/ssh"
 	"io"
 	"log"
 	"os"
 	"os/exec"
+
+	"github.com/BurntSushi/toml"
+	gssh "github.com/gliderlabs/ssh"
+	"golang.org/x/crypto/ssh"
 
 	"sync/atomic"
 )
@@ -32,7 +33,7 @@ func DefaultConfig() Config {
 	return Config{
 		Host:                   "",
 		Port:                   2222,
-		ServerKeyFilename:      []string{"serverkey.key"},
+		ServerKeyFilename:      []string{"server.key"},
 		MaxNumberOfConnections: 0,
 	}
 }

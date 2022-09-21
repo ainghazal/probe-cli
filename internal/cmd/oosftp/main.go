@@ -17,7 +17,8 @@ type cmd struct {
 
 var CMDS = map[string]cmd{
 	"server":   {mainSftp, sftpHelp},
-	"generate": {main_sshgen, sshgenhelp},
+	"generate": {mainSSHGen, sshGenHelp},
+	"submit":   {mainSubmit, sftpSubmitHelp},
 }
 
 // Prints all available commands to the given writer
@@ -36,8 +37,9 @@ func ErrPrintf(s string, args ...interface{}) {
 func main() {
 	args := os.Args
 	if len(args) < 2 {
-		ErrPrintf("Missing command: %s commandname args\n", args[0])
-		ErrPrintf("\n%s\n", "Where commandname is one of the follow:")
+		ErrPrintf("Missing command: %s cmd args\n", args[0])
+		ErrPrintf("\n%s\n", "Where cmd is one of the follow:")
+		fmt.Println()
 		printcmds(os.Stderr)
 		return
 	}

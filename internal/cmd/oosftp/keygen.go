@@ -5,10 +5,10 @@ import (
 	"os"
 )
 
-const sshgenhelp = "Generate SSH key"
+const sshGenHelp = "Generate SSH key"
 
 // Generates a private/public ed25519 keypair
-func main_sshgen(args []string) {
+func mainSSHGen(args []string) {
 	if len(args) != 2 {
 		ErrPrintf("Wrong arguments: %s outputkey\n", args[0])
 		return

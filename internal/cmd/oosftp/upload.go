@@ -1,5 +1,7 @@
 package main
 
+// Send the reports picked from the server filesystem to the OONI collector.
+
 import (
 	"bufio"
 	"context"
@@ -23,6 +25,27 @@ const (
 
 var startTime = time.Now()
 
+func processMeasurementFile(path string) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("cannot process:", r)
+		}
+	}()
+	defer func() {
+		os.Remove(path)
+	}()
+	ctx := context.Background()
+	sess := newSession(ctx)
+	defer sess.Close()
+
+	submitter := newSubmitter(sess, ctx)
+
+	lines := readLines(path)
+	n, err := submitAll(ctx, lines, submitter)
+	fmt.Println("Submitted measurements: ", n)
+	runtimex.PanicOnError(err, "error occurred while submitting")
+}
+
 type logHandler struct {
 	io.Writer
 }
@@ -35,20 +58,6 @@ func (h *logHandler) HandleLog(e *log.Entry) (err error) {
 	s += "\n"
 	_, err = h.Writer.Write([]byte(s))
 	return
-}
-
-func ProcessFileCallback(path string) {
-	ctx := context.Background()
-	sess := newSession(ctx)
-	defer sess.Close()
-
-	submitter := newSubmitter(sess, ctx)
-
-	lines := readLines(path)
-	n, err := submitAll(ctx, lines, submitter)
-	fmt.Println("Submitted measurements: ", n)
-	runtimex.PanicOnError(err, "error occurred while submitting")
-	// TODO delete the original report -------------------------
 }
 
 func readLines(path string) []string {
