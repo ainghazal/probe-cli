@@ -5,66 +5,53 @@ package riseupvpn
 
 import (
 	"context"
-	"encoding/json"
+	"fmt"
+	"strconv"
 	"time"
 
+	"github.com/ooni/minivpn/pkg/config"
+	"github.com/ooni/minivpn/pkg/tracex"
+	"github.com/ooni/minivpn/pkg/tunnel"
+
 	"github.com/ooni/probe-cli/v3/internal/experiment/urlgetter"
+	"github.com/ooni/probe-cli/v3/internal/measurexlite"
 	"github.com/ooni/probe-cli/v3/internal/model"
 	"github.com/ooni/probe-cli/v3/internal/netxlite"
 	"github.com/ooni/probe-cli/v3/internal/progress"
+
+	"github.com/apex/log"
 )
 
 const (
-	testName      = "riseupvpn"
-	testVersion   = "0.3.0"
-	eipServiceURL = "https://api.black.riseup.net:443/3/config/eip-service.json"
-	providerURL   = "https://riseup.net/provider.json"
-	geoServiceURL = "https://api.black.riseup.net:9001/json"
-	tcpConnect    = "tcpconnect://"
+	testName    = "riseupvpn"
+	testVersion = "0.4.0"
 )
-
-// EIPServiceV3 is the main JSON object returned by eip-service.json.
-type EIPServiceV3 struct {
-	Gateways []GatewayV3
-}
-
-// CapabilitiesV3 is a list of transports a gateway supports
-type CapabilitiesV3 struct {
-	Transport []TransportV3
-}
-
-// GatewayV3 describes a gateway.
-type GatewayV3 struct {
-	Capabilities CapabilitiesV3
-	Host         string
-	IPAddress    string `json:"ip_address"`
-}
-
-// TransportV3 describes a transport.
-type TransportV3 struct {
-	Type      string
-	Protocols []string
-	Ports     []string
-	Options   map[string]string
-}
-
-// GatewayConnection describes the connection to a riseupvpn gateway.
-type GatewayConnection struct {
-	IP            string `json:"ip"`
-	Port          int    `json:"port"`
-	TransportType string `json:"transport_type"`
-}
 
 // Config contains the riseupvpn experiment config.
 type Config struct {
 	urlgetter.Config
+	vpnOptions config.OpenVPNOptions
+}
+
+// Endpoint is a single endpoint that we will measure.
+type Endpoint struct {
+	Protocol  string
+	IP        string
+	Port      string
+	Transport config.Proto
+	Proxy     string
+}
+
+func (e *Endpoint) String() string {
+	return fmt.Sprintf("%s://%s:%s/%s", e.Protocol, e.IP, e.Port, e.Transport)
 }
 
 // TestKeys contains riseupvpn test keys.
 type TestKeys struct {
 	urlgetter.TestKeys
-	APIFailures  []string `json:"api_failures"`
-	CACertStatus bool     `json:"ca_cert_status"`
+	APIFailures  []string           `json:"api_failures"`
+	CACertStatus bool               `json:"ca_cert_status"`
+	Handshakes   []*SingleHandshake `json:"handshakes"`
 }
 
 // NewTestKeys creates new riseupvpn TestKeys.
@@ -72,15 +59,16 @@ func NewTestKeys() *TestKeys {
 	return &TestKeys{
 		APIFailures:  []string{},
 		CACertStatus: true,
+		Handshakes:   []*SingleHandshake{},
 	}
 }
 
-// UpdateProviderAPITestKeys updates the TestKeys using the given MultiOutput result.
+// UpdateProviderAPITestKeys updates the TestKeys for API requests using the given [urlgetter.MultiOutput] result.
 func (tk *TestKeys) UpdateProviderAPITestKeys(v urlgetter.MultiOutput) {
 	tk.NetworkEvents = append(tk.NetworkEvents, v.TestKeys.NetworkEvents...)
+	tk.TCPConnect = append(tk.TCPConnect, v.TestKeys.TCPConnect...)
 	tk.Queries = append(tk.Queries, v.TestKeys.Queries...)
 	tk.Requests = append(tk.Requests, v.TestKeys.Requests...)
-	tk.TCPConnect = append(tk.TCPConnect, v.TestKeys.TCPConnect...)
 	tk.TLSHandshakes = append(tk.TLSHandshakes, v.TestKeys.TLSHandshakes...)
 	if v.TestKeys.Failure != nil {
 		tk.APIFailures = append(tk.APIFailures, *v.TestKeys.Failure)
@@ -88,12 +76,9 @@ func (tk *TestKeys) UpdateProviderAPITestKeys(v urlgetter.MultiOutput) {
 	}
 }
 
-// AddGatewayConnectTestKeys updates the TestKeys using the given MultiOutput
-// result of gateway connectivity testing. Sets TransportStatus to "ok" if
-// any successful TCP connection could be made
-func (tk *TestKeys) AddGatewayConnectTestKeys(v urlgetter.MultiOutput, transportType string) {
-	tk.NetworkEvents = append(tk.NetworkEvents, v.TestKeys.NetworkEvents...)
-	tk.TCPConnect = append(tk.TCPConnect, v.TestKeys.TCPConnect...)
+// UpdateWithAPIFailure updates the TestKeys for API failures.
+func (tk *TestKeys) UpdateWithAPIFailure(f string) {
+	tk.APIFailures = append(tk.APIFailures, f)
 }
 
 // AddCACertFetchTestKeys adds generic urlgetter.Get() testKeys to riseupvpn specific test keys
@@ -103,6 +88,10 @@ func (tk *TestKeys) AddCACertFetchTestKeys(testKeys urlgetter.TestKeys) {
 	tk.Requests = append(tk.Requests, testKeys.Requests...)
 	tk.TCPConnect = append(tk.TCPConnect, testKeys.TCPConnect...)
 	tk.TLSHandshakes = append(tk.TLSHandshakes, testKeys.TLSHandshakes...)
+}
+
+func (tk *TestKeys) AddGatewayHandshakeTestKeys(handshake *SingleHandshake) {
+	tk.Handshakes = append(tk.Handshakes, handshake)
 }
 
 // Measurer performs the measurement.
@@ -146,9 +135,9 @@ func (m Measurer) Run(ctx context.Context, args *model.ExperimentArgs) error {
 		Session: sess,
 	}
 
-	// See if we can get the certificate first
+	// See if we can get the CA certificate first
 	caTarget := "https://black.riseup.net/ca.crt"
-	inputs := []urlgetter.MultiInput{{
+	inputsForAPI := []urlgetter.MultiInput{{
 		Target: caTarget,
 		Config: urlgetter.Config{
 			Method:          "GET",
@@ -166,8 +155,12 @@ func (m Measurer) Run(ctx context.Context, args *model.ExperimentArgs) error {
 	// TODO(https://github.com/ooni/probe/issues/2559): solve this problem by serving the
 	// correct CA and the endpoints to probes using check-in v2 (aka richer input).
 
+	// If we successfully fetch the riseup CA, we will also use it for the mutual authentication during the
+	// OpenVPN handshake. We pass the CA byte array later on the `parseOpenVPNCredentials` call below.
+	var riseupCA []byte
+
 	callbacksStage1 := progress.NewScaler(callbacks, 0, 0.25)
-	for entry := range multi.Collect(ctx, inputs, "riseupvpn", callbacksStage1) {
+	for entry := range multi.Collect(ctx, inputsForAPI, "riseupvpn", callbacksStage1) {
 		tk := entry.TestKeys
 		testkeys.AddCACertFetchTestKeys(tk)
 		if tk.Failure != nil {
@@ -176,7 +169,8 @@ func (m Measurer) Run(ctx context.Context, args *model.ExperimentArgs) error {
 			// Note well: returning nil here causes the measurement to be submitted.
 			return nil
 		}
-		if ok := certPool.AppendCertsFromPEM([]byte(tk.HTTPResponseBody)); !ok {
+		riseupCA = []byte(tk.HTTPResponseBody)
+		if ok := certPool.AppendCertsFromPEM(riseupCA); !ok {
 			testkeys.CACertStatus = false
 			testkeys.APIFailures = append(testkeys.APIFailures, "invalid_ca")
 			// Note well: returning nil here causes the measurement to be submitted.
@@ -185,7 +179,7 @@ func (m Measurer) Run(ctx context.Context, args *model.ExperimentArgs) error {
 	}
 
 	// Now test the service endpoints using the above-fetched CA
-	inputs = []urlgetter.MultiInput{
+	inputsForAPI = []urlgetter.MultiInput{
 		// Here we need to provide the method explicitly. See
 		// https://github.com/ooni/probe-engine/issues/827.
 		{Target: providerURL, Config: urlgetter.Config{
@@ -198,7 +192,7 @@ func (m Measurer) Run(ctx context.Context, args *model.ExperimentArgs) error {
 			Method:          "GET",
 			FailOnHTTPError: true,
 		}},
-		{Target: geoServiceURL, Config: urlgetter.Config{
+		{Target: clientCertURL, Config: urlgetter.Config{
 			CertPool:        certPool,
 			Method:          "GET",
 			FailOnHTTPError: true,
@@ -206,7 +200,7 @@ func (m Measurer) Run(ctx context.Context, args *model.ExperimentArgs) error {
 	}
 
 	callbacksStage2 := progress.NewScaler(callbacks, 0.25, 0.5)
-	for entry := range multi.Collect(ctx, inputs, "riseupvpn", callbacksStage2) {
+	for entry := range multi.Collect(ctx, inputsForAPI, "riseupvpn", callbacksStage2) {
 		testkeys.UpdateProviderAPITestKeys(entry)
 		tk := entry.TestKeys
 		if tk.Failure != nil {
@@ -215,81 +209,125 @@ func (m Measurer) Run(ctx context.Context, args *model.ExperimentArgs) error {
 		}
 	}
 
-	// test gateways now
-	gateways := parseGateways(testkeys)
-	openvpnEndpoints := generateMultiInputs(gateways, "openvpn")
-	obfs4Endpoints := generateMultiInputs(gateways, "obfs4")
+	// TODO(ainghazal): extract single method call with opts, creds --------------------
+	opts, err := parseOpenVPNOptions(testkeys)
+	if err != nil {
+		// we abort the measurement, we cannot continue without config and credentials.
+		testkeys.UpdateWithAPIFailure(err.Error())
+		return nil
+	}
 
-	// measure openvpn in parallel
-	callbacksStage3 := progress.NewScaler(callbacks, 0.5, 0.75)
-	for entry := range multi.Collect(ctx, openvpnEndpoints, "riseupvpn", callbacksStage3) {
-		testkeys.AddGatewayConnectTestKeys(entry, "openvpn")
+	creds, err := parseOpenVPNCredentials(testkeys, riseupCA)
+	if err != nil {
+		// we abort the measurement, we cannot continue without valid credentials
+		testkeys.UpdateWithAPIFailure(err.Error())
+	}
+
+	// TODO(ainghazal): minivpn needs to raise early if missing credentials. we should run HasAuthInfo() early.
+	m.Config.vpnOptions = config.OpenVPNOptions{
+		Auth:   opts["auth"].(string),
+		Cipher: opts["cipher"].(string),
+		Cert:   creds.cert,
+		CA:     creds.ca,
+		Key:    creds.key,
+	}
+	// TODO(ainghazal): refactor ---------------------------------------------
+
+	// test openvpn gateways
+	gateways := parseGateways(testkeys)
+	openvpnEndpoints := generateEndpoints(gateways, "openvpn")
+	//obfs4Endpoints := generateEndpoints(gateways, "obfs4")
+
+	openvpnTargets := sampleRandomEndpoints(openvpnEndpoints)
+
+	// TODO(ainghazal): measure several openvpn handshakes in parallel
+	for idx, endpoint := range openvpnTargets {
+		testkeys.AddGatewayHandshakeTestKeys(m.connectAndHandshake(ctx, int64(idx), time.Now(), log.Log, endpoint))
 	}
 
 	// measure obfs4 in parallel
 	// TODO(bassosimone): when urlgetter is able to do obfs4 handshakes, here
 	// can possibly also test for the obfs4 handshake.
 	// See https://github.com/ooni/probe/issues/1463.
-	callbacksStage4 := progress.NewScaler(callbacks, 0.75, 1)
-	for entry := range multi.Collect(ctx, obfs4Endpoints, "riseupvpn", callbacksStage4) {
-		testkeys.AddGatewayConnectTestKeys(entry, "obfs4")
-	}
+	/*
+		callbacksStage4 := progress.NewScaler(callbacks, 0.75, 1)
+		for entry := range multi.Collect(ctx, obfs4Endpoints, "riseupvpn", callbacksStage4) {
+			testkeys.AddGatewayConnectTestKeys(entry, "obfs4")
+		}
+	*/
 
 	// Note well: returning nil here causes the measurement to be submitted.
 	return nil
 }
 
-func generateMultiInputs(gateways []GatewayV3, transportType string) []urlgetter.MultiInput {
-	var gatewayInputs []urlgetter.MultiInput
-	for _, gateway := range gateways {
-		for _, transport := range gateway.Capabilities.Transport {
-			if transport.Type != transportType {
-				continue
-			}
-			supportsTCP := false
-			for _, protocol := range transport.Protocols {
-				if protocol == "tcp" {
-					supportsTCP = true
-				}
-			}
-			if !supportsTCP {
-				continue
-			}
-			for _, port := range transport.Ports {
-				tcpConnection := tcpConnect + gateway.IPAddress + ":" + port
-				gatewayInputs = append(gatewayInputs, urlgetter.MultiInput{Target: tcpConnection})
-			}
-		}
-	}
-	return gatewayInputs
+// sampleRandomEndpoints return a given number of targets randomly sampled from the input array.
+func sampleRandomEndpoints(endpoints []*Endpoint) []*Endpoint {
+	// TODO(ainghazal): implement, pass number to be picked.
+	// TODO(ainghazal): we could sample a given number of IPs, and then make sure to cover all of the
+	// ports for a given IP.
+	return endpoints[:1]
 }
 
-func parseGateways(testKeys *TestKeys) []GatewayV3 {
-	for _, requestEntry := range testKeys.Requests {
-		if requestEntry.Request.URL == eipServiceURL && requestEntry.Failure == nil {
-			// TODO(bassosimone,cyberta): is it reasonable that we discard
-			// the error when the JSON we fetched cannot be parsed?
-			// See https://github.com/ooni/probe/issues/1432
-			eipService, err := DecodeEIPServiceV3(string(requestEntry.Response.Body))
-			if err == nil {
-				return eipService.Gateways
-			}
-		}
-	}
-	return nil
+// SingleHandshake contains the results of a single handshake.
+type SingleHandshake struct {
+	TCPConnect       *model.ArchivalTCPConnectResult `json:"tcp_connect,omitempty"`
+	OpenVPNHandshake *ArchivalOpenVPNHandshakeResult `json:"openvpn_handshake"`
+	NetworkEvents    []*tracex.Event                 `json:"network_events"`
 }
 
-// DecodeEIPServiceV3 decodes eip-service.json version 3
-func DecodeEIPServiceV3(body string) (*EIPServiceV3, error) {
-	var eip EIPServiceV3
-	err := json.Unmarshal([]byte(body), &eip)
+// connectAndHandshake dials a connection and attempts an OpenVPN handshake using that dialer.
+func (m *Measurer) connectAndHandshake(ctx context.Context, index int64,
+	zeroTime time.Time, logger model.Logger, endpoint *Endpoint) *SingleHandshake {
+
+	// create a trace for the network dialer
+	trace := measurexlite.NewTrace(index, zeroTime)
+
+	// TODO(ainghazal): can I pass tags to this tracer?
+	dialer := trace.NewDialerWithoutResolver(logger)
+
+	// create a vpn tun Device that attempts to dial and performs the handshake
+	handshakeTracer := tracex.NewTracer(time.Now())
+	_, err := tunnel.Start(ctx, dialer, getVPNConfig(handshakeTracer, endpoint, &m.Config.vpnOptions))
+	var failure string
 	if err != nil {
-		return nil, err
+		failure = err.Error()
 	}
-	return &eip, nil
+	handshakeEvents := handshakeTracer.Trace()
+	port, _ := strconv.Atoi(endpoint.Port)
+
+	return &SingleHandshake{
+		TCPConnect: trace.FirstTCPConnectOrNil(),
+		OpenVPNHandshake: &ArchivalOpenVPNHandshakeResult{
+			Endpoint: endpoint.String(),
+			IP:       endpoint.IP,
+			Port:     port,
+			Status: ArchivalOpenVPNConnectStatus{
+				Failure: &failure, // TODO(ainghazal): or nil
+				Success: true,     // TODO(ainghazal): last stage == ok
+			},
+			T0:            0,                              // TODO: time of first event in trace
+			T:             time.Since(zeroTime).Seconds(), // TODO: time of last event in trace
+			Tags:          []string{},
+			TransactionID: index,
+		},
+		NetworkEvents: handshakeEvents,
+	}
 }
 
-// NewExperimentMeasurer creates a new ExperimentMeasurer.
-func NewExperimentMeasurer(config Config) model.ExperimentMeasurer {
-	return Measurer{Config: config}
+func getVPNConfig(tracer tracex.HandshakeTracer, endpoint *Endpoint, opts *config.OpenVPNOptions) *config.Config {
+	cfg := config.NewConfig(
+		config.WithOpenVPNOptions(
+			&config.OpenVPNOptions{
+				Remote: endpoint.IP,
+				Port:   endpoint.Port,
+				Proto:  endpoint.Transport,
+				CA:     opts.CA,
+				Cert:   opts.Cert,
+				Key:    opts.Key,
+				Cipher: opts.Cipher,
+				Auth:   opts.Auth,
+			},
+		),
+		config.WithHandshakeTracer(tracer))
+	return cfg
 }
