@@ -10,15 +10,17 @@ import (
 )
 
 func init() {
-	AllExperiments["wireguard"] = &Factory{
-		build: func(config interface{}) model.ExperimentMeasurer {
-			return wireguard.NewExperimentMeasurer(
-				*config.(*wireguard.Config),
-			)
-		},
-		config:           &wireguard.Config{},
-		enabledByDefault: true,
-		interruptible:    true,
-		inputPolicy:      model.InputNone,
+	AllExperiments["wireguard"] = func() *Factory {
+		return &Factory{
+			build: func(config interface{}) model.ExperimentMeasurer {
+				return wireguard.NewExperimentMeasurer(
+					*config.(*wireguard.Config),
+				)
+			},
+			config:           &wireguard.Config{},
+			enabledByDefault: true,
+			interruptible:    true,
+			inputPolicy:      model.InputNone,
+		}
 	}
 }
