@@ -1,3 +1,6 @@
+//go:build dsljavascript
+// +build dsljavascript
+
 package main
 
 import (
